@@ -60,6 +60,14 @@ foreach (var config in requiredConfigs)
 var app = builder.Build();
 
 
+app.UseCors(policy =>
+{
+    policy.AllowAnyOrigin()
+          .AllowAnyMethod()
+          .AllowAnyHeader();
+});
+
+
 app.UseHttpsRedirection();
 app.UseAuthorization();
 
@@ -71,7 +79,7 @@ app.Map("/audio-stream", async context =>
 {
     if (context.WebSockets.IsWebSocketRequest)
     {
-        var webSocketManager = app.Services.GetRequiredService<LlmTranslator.Api.WebSockets.WebSocketManager>();
+        var webSocketManager = app.Services.GetRequiredService<WebSocketManager>();
         var webSocket = await context.WebSockets.AcceptWebSocketAsync();
         await webSocketManager.HandleWebSocketConnection(webSocket, context);
     }

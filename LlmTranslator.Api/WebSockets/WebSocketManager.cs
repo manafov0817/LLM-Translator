@@ -2,6 +2,7 @@
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using LlmTranslator.Api.Utils;
 
 namespace LlmTranslator.Api.WebSockets
@@ -169,7 +170,61 @@ namespace LlmTranslator.Api.WebSockets
 
         private class SetupMessage
         {
+            [JsonPropertyName("sampleRate")]
+            public int SampleRate { get; set; }
+
+            [JsonPropertyName("mixType")]
+            public string MixType { get; set; } = string.Empty;
+
+            [JsonPropertyName("callSid")]
             public string CallSid { get; set; } = string.Empty;
+
+            [JsonPropertyName("direction")]
+            public string Direction { get; set; } = string.Empty;
+
+            [JsonPropertyName("from")]
+            public string From { get; set; } = string.Empty;
+
+            [JsonPropertyName("to")]
+            public string To { get; set; } = string.Empty;
+
+            [JsonPropertyName("callId")]
+            public string CallId { get; set; } = string.Empty;
+
+            [JsonPropertyName("sbcCallid")]
+            public string SbcCallid { get; set; } = string.Empty;
+
+            [JsonPropertyName("sipStatus")]
+            public int SipStatus { get; set; }
+
+            [JsonPropertyName("sipReason")]
+            public string SipReason { get; set; } = string.Empty;
+
+            [JsonPropertyName("callStatus")]
+            public string CallStatus { get; set; } = string.Empty;
+
+            [JsonPropertyName("accountSid")]
+            public string AccountSid { get; set; } = string.Empty;
+
+            [JsonPropertyName("traceId")]
+            public string TraceId { get; set; } = string.Empty;
+
+            [JsonPropertyName("applicationSid")]
+            public string ApplicationSid { get; set; } = string.Empty;
+
+            [JsonPropertyName("fsSipAddress")]
+            public string FsSipAddress { get; set; } = string.Empty;
+
+            [JsonPropertyName("originatingSipIp")]
+            public string OriginatingSipIp { get; set; } = string.Empty;
+
+            [JsonPropertyName("apiBaseUrl")]
+            public string ApiBaseUrl { get; set; } = string.Empty;
+
+            [JsonPropertyName("fsPublicIp")]
+            public string FsPublicIp { get; set; } = string.Empty;
+
+            [JsonPropertyName("parentCallSid")]
             public string? ParentCallSid { get; set; }
         }
     }

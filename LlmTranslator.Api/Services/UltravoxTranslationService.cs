@@ -157,11 +157,11 @@ Wait until the speaker is done speaking before translating, and translate the en
                     },
                     inactivityMessages = new[]
                     {
-                        new
-                        {
-                            duration = "120s"
-                        }
-                    },
+                new
+                {
+                    duration = "120s"
+                }
+            },
                     medium = new
                     {
                         serverWebSocket = new
@@ -171,70 +171,50 @@ Wait until the speaker is done speaking before translating, and translate the en
                         }
                     }
                 };
-
                 using var httpClient = new HttpClient();
                 httpClient.DefaultRequestHeaders.Add("X-API-Key", _apiKey);
-                httpClient.DefaultRequestHeaders.Add("Content-Type", "application/json");
-
                 _logger.LogDebug("Sending request to Ultravox API");
-
                 var json = JsonSerializer.Serialize(payload);
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-                try
+                var response = await httpClient.PostAsync("https://api.ultravox.ai/api/calls", content);
+                if (!response.IsSuccessStatusCode)
                 {
-                    var response = await httpClient.PostAsync("https://api.ultravox.ai/api/calls", content);
-
-                    if (!response.IsSuccessStatusCode)
+                    // Handle specific error codes
+                    if (response.StatusCode == System.Net.HttpStatusCode.PaymentRequired)
                     {
-                        // Handle specific error codes
-                        if (response.StatusCode == System.Net.HttpStatusCode.PaymentRequired)
-                        {
-                            var errorContent = await response.Content.ReadAsStringAsync();
-                            _logger.LogError("Ultravox subscription issue: Payment required. {Detail}", errorContent);
-                            return new CallCreationResult
-                            {
-                                Error = true,
-                                Message = $"Ultravox subscription issue: Payment required. {errorContent}"
-                            };
-                        }
-
+                        var errorContent = await response.Content.ReadAsStringAsync();
+                        _logger.LogError("Ultravox subscription issue: Payment required. {Detail}", errorContent);
                         return new CallCreationResult
                         {
                             Error = true,
-                            Message = $"Failed to create Ultravox call: {response.StatusCode}"
+                            Message = $"Ultravox subscription issue: Payment required. {errorContent}"
                         };
                     }
-
-                    var responseContent = await response.Content.ReadAsStringAsync();
-                    var responseData = JsonSerializer.Deserialize<UltravoxResponse>(responseContent);
-
-                    if (responseData == null || string.IsNullOrEmpty(responseData.JoinUrl))
-                    {
-                        return new CallCreationResult
-                        {
-                            Error = true,
-                            Message = "Invalid response from Ultravox API"
-                        };
-                    }
-
-                    _logger.LogInformation("Ultravox Call registered with joinUrl: {JoinUrl}", responseData.JoinUrl);
-
-                    return new CallCreationResult
-                    {
-                        Error = false,
-                        JoinUrl = responseData.JoinUrl
-                    };
-                }
-                catch (HttpRequestException ex)
-                {
-                    _logger.LogError(ex, "HTTP error when creating Ultravox call");
                     return new CallCreationResult
                     {
                         Error = true,
-                        Message = $"Failed to create Ultravox call: {ex.Message}"
+                        Message = $"Failed to create Ultravox call: {response.StatusCode}"
                     };
                 }
+                var responseContent = await response.Content.ReadAsStringAsync();
+                var responseData = JsonSerializer.Deserialize<UltravoxResponse>(responseContent);
+                if (responseData == null || string.IsNullOrEmpty(responseData.JoinUrl))
+                {
+                    return new CallCreationResult
+                    {
+                        Error = true,
+                        Message = "Invalid response from Ultravox API"
+                    };
+                }
+                _logger.LogInformation("Ultravox Call registered with joinUrl: {JoinUrl}", responseData.JoinUrl);
+                return new CallCreationResult
+                {
+                    Error = false,
+                    JoinUrl = responseData.JoinUrl
+                };
+
+
             }
             catch (Exception ex)
             {

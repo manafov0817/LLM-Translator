@@ -62,7 +62,7 @@ namespace LlmTranslator.Api.Controllers
                     _logger.LogInformation("Processing inbound call: from={From}, to={To}", from, to);
 
                     // Get configuration values with defaults
-                    int sampleRate = _configuration.GetValue<int>("AudioSampleRate", 8000);
+                    int sampleRate = GetSampleRate();
                     bool lowerVolume = !string.IsNullOrEmpty(_configuration["LowerVolume"]);
                     string callerIdOverride = _configuration["CallerIdOverride"] ?? from;
 
@@ -71,18 +71,19 @@ namespace LlmTranslator.Api.Controllers
 
                     // Set up target from TO address
                     var target = CreateTarget(to);
-                    _logger.LogDebug("Created target: {Target}", target.ToJsonString());
+                    _logger.LogDebug("Created target: {Target}", JsonSerializer.Serialize(target));
 
                     // Build the response
                     _logger.LogDebug("Building response JSON");
                     var response = new JsonArray();
 
-                    // Add config action with WebSocket setup
+                    // Add config action with WebSocket setup for caller (A leg)
                     var configAction = new JsonObject
                     {
                         ["verb"] = "config",
                         ["listen"] = new JsonObject
                         {
+                            ["enable"] = true,
                             ["url"] = "/audio-stream",
                             ["mixType"] = "mono",
                             ["sampleRate"] = sampleRate,
@@ -101,14 +102,16 @@ namespace LlmTranslator.Api.Controllers
                         configAction["boostAudioSignal"] = _configuration["LowerVolume"];
                     }
 
+                    
+
                     // Add the config action to the response
                     response.Add(configAction);
 
-                    // Add dial action for called party
+                    // Add dial action for called party (B leg)
                     var dialAction = new JsonObject
                     {
                         ["verb"] = "dial",
-                        ["callerId"] = callerIdOverride,
+                        ["callerId"] = "+17692481301",
                         ["target"] = target,
                         ["listen"] = new JsonObject
                         {
@@ -125,7 +128,7 @@ namespace LlmTranslator.Api.Controllers
                         }
                     };
 
-                    // Add dub track for the called party
+                    // Add dub track for the called party (B leg)
                     var dialDubArray = new JsonArray();
                     dialDubArray.Add(new JsonObject
                     {
@@ -137,8 +140,14 @@ namespace LlmTranslator.Api.Controllers
                     // Add the dial action to the response
                     response.Add(dialAction);
 
+                    // Add hangup verb to match the Node.js implementation
+                    response.Add(new JsonObject
+                    {
+                        ["verb"] = "hangup"
+                    });
+
                     // Log the complete response for debugging
-                    _logger.LogDebug("Returning response: {Response}", response.ToJsonString());
+                    _logger.LogDebug("Returning response: {Response}", JsonSerializer.Serialize(response));
 
                     return Ok(response);
                 }
@@ -214,6 +223,22 @@ namespace LlmTranslator.Api.Controllers
             return defaultValue;
         }
 
+        /// <summary>
+        /// Get the appropriate sample rate based on which translation service is configured
+        /// </summary>
+        private int GetSampleRate()
+        {
+            // Use 24000 for OpenAI or 8000 for Ultravox, matching the Node.js implementation
+            if (!string.IsNullOrEmpty(_configuration["OpenAI:ApiKey"]))
+            {
+                return 24000;
+            }
+            return 8000;
+        }
+
+        /// <summary>
+        /// Creates a target for outbound dialing
+        /// </summary>
         private JsonNode CreateTarget(string to)
         {
             // Check configuration for override setting
