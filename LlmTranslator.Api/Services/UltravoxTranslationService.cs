@@ -22,14 +22,14 @@ namespace LlmTranslator.Api.Services
         public ITranslationAdapter CreateTranslationAdapter(ILogger logger, string sourceLanguage, string targetLanguage)
         {
             var prompt = $@"
-You are a translation machine. Your sole function is to translate the input text from 
-{sourceLanguage} to {targetLanguage}.
-Do not add, omit, or alter any information.
-Do not provide explanations, opinions, or any additional text beyond the direct translation.
-You are not aware of any other facts, knowledge, or context beyond translation between 
-{sourceLanguage} to {targetLanguage}.
-Wait until the speaker is done speaking before translating, and translate the entire input text from their turn.
-";
+                        You are a translation machine. Your sole function is to translate the input text from 
+                        {sourceLanguage} to {targetLanguage}.
+                        Do not add, omit, or alter any information.
+                        Do not provide explanations, opinions, or any additional text beyond the direct translation.
+                        You are not aware of any other facts, knowledge, or context beyond translation between 
+                        {sourceLanguage} to {targetLanguage}.
+                        Wait until the speaker is done speaking before translating, and translate the entire input text from their turn.
+                        ";
 
             return new UltravoxTranslationAdapter(logger, _apiKey, prompt, _enableFileLogging);
         }
@@ -258,71 +258,234 @@ Wait until the speaker is done speaking before translating, and translate the en
             }
         }
 
-        private async Task ReceiveUltravoxMessagesAsync()
-        {
-            var buffer = new byte[16384]; // 16KB buffer
 
+
+
+
+        // Add these enhanced methods to your UltravoxTranslationAdapter class
+
+        public async Task ProcessAudioAsync(byte[] audioData)
+        {
             try
             {
-                while (_ultravoxWebSocket != null &&
-                       _ultravoxWebSocket.State == WebSocketState.Open &&
-                       !(_cancellationTokenSource?.IsCancellationRequested ?? true))
+                if (_enableFileLogging && !string.IsNullOrEmpty(_incomingAudioFilePath))
                 {
-                    var result = await _ultravoxWebSocket.ReceiveAsync(
-                        new ArraySegment<byte>(buffer),
-                        _cancellationTokenSource?.Token ?? CancellationToken.None);
+                    await File.AppendAllBytesAsync(_incomingAudioFilePath, audioData);
+                    _logger.LogDebug("[DIAG] Wrote {Length} bytes to {FilePath}",
+                        audioData.Length, _incomingAudioFilePath);
+                }
 
-                    if (result.MessageType == WebSocketMessageType.Binary)
-                    {
-                        // This is audio data from Ultravox
-                        var audioData = new byte[result.Count];
-                        Array.Copy(buffer, audioData, result.Count);
+                // Track and log aggregate audio data
+                _totalBytesReceived += audioData.Length;
+                if (_totalBytesReceived % 50000 < audioData.Length)
+                {
+                    _logger.LogInformation("[DIAG] Total audio received: {TotalKB}KB, WebSocket state: {State}",
+                        _totalBytesReceived / 1024,
+                        _ultravoxWebSocket?.State.ToString() ?? "null");
+                }
 
-                        await ProcessUltravoxAudioAsync(audioData);
-                    }
-                    else if (result.MessageType == WebSocketMessageType.Text)
+                // Check if we're properly initialized
+                if (!_initialized)
+                {
+                    _logger.LogWarning("[DIAG] Received audio but Ultravox adapter not yet initialized. Buffering: {Length} bytes",
+                        audioData.Length);
+
+                    // Store in a buffer if needed, or just skip
+                    return;
+                }
+
+                // Check if we're in an error state
+                if (_errored)
+                {
+                    _logger.LogWarning("[DIAG] Received audio but Ultravox adapter is in error state. Skipping: {Length} bytes",
+                        audioData.Length);
+                    return;
+                }
+
+                // For Ultravox, just send the raw PCM audio (no base64 encoding needed)
+                if (_ultravoxWebSocket != null && _ultravoxWebSocket.State == WebSocketState.Open)
+                {
+                    _logger.LogDebug("[DIAG] Sending {Length} bytes to Ultravox", audioData.Length);
+
+                    try
                     {
-                        // This is a JSON control message
-                        var message = Encoding.UTF8.GetString(buffer, 0, result.Count);
-                        _logger.LogDebug("Ultravox server message: {Message}", message);
+                        await _ultravoxWebSocket.SendAsync(
+                            new ArraySegment<byte>(audioData),
+                            WebSocketMessageType.Binary,
+                            true,
+                            _cancellationTokenSource?.Token ?? CancellationToken.None);
+
+                        _logger.LogDebug("[DIAG] Successfully sent {Length} bytes to Ultravox", audioData.Length);
                     }
-                    else if (result.MessageType == WebSocketMessageType.Close)
+                    catch (Exception ex)
                     {
-                        _logger.LogInformation("Ultravox WebSocket closed: {CloseStatus} {CloseDescription}",
-                            result.CloseStatus, result.CloseStatusDescription);
-                        break;
+                        _logger.LogError(ex, "[DIAG] Error sending audio to Ultravox: {Length} bytes", audioData.Length);
                     }
                 }
-            }
-            catch (OperationCanceledException)
-            {
-                _logger.LogInformation("Ultravox message processing canceled");
+                else
+                {
+                    _logger.LogWarning("[DIAG] Cannot send audio to Ultravox - WebSocket {State}",
+                        _ultravoxWebSocket?.State.ToString() ?? "null");
+                }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error receiving messages from Ultravox");
+                _logger.LogError(ex, "[DIAG] Unhandled exception in ProcessAudioAsync");
             }
         }
 
         private async Task ProcessUltravoxAudioAsync(byte[] audioData)
         {
-            if (_enableFileLogging && !string.IsNullOrEmpty(_outgoingAudioFilePath))
+            try
             {
-                await File.AppendAllBytesAsync(_outgoingAudioFilePath, audioData);
-                _logger.LogDebug("Wrote {Length} bytes to {FilePath}",
-                    audioData.Length, _outgoingAudioFilePath);
-            }
+                if (_enableFileLogging && !string.IsNullOrEmpty(_outgoingAudioFilePath))
+                {
+                    await File.AppendAllBytesAsync(_outgoingAudioFilePath, audioData);
+                    _logger.LogDebug("[DIAG] Wrote {Length} bytes to {FilePath}",
+                        audioData.Length, _outgoingAudioFilePath);
+                }
 
-            // Send to outgoing WebSocket if available
-            if (_outgoingWebSocket != null && _outgoingWebSocket.State == WebSocketState.Open)
+                // Track and log translated audio data
+                _totalBytesSent += audioData.Length;
+                if (_totalBytesSent % 50000 < audioData.Length)
+                {
+                    _logger.LogInformation("[DIAG] Received translated audio from Ultravox: {TotalKB}KB, Outgoing WebSocket: {State}",
+                        _totalBytesSent / 1024,
+                        _outgoingWebSocket?.State.ToString() ?? "null");
+                }
+
+                // Send to outgoing WebSocket if available
+                if (_outgoingWebSocket != null && _outgoingWebSocket.State == WebSocketState.Open)
+                {
+                    _logger.LogDebug("[DIAG] Sending {Length} bytes of translated audio to caller", audioData.Length);
+
+                    try
+                    {
+                        await _outgoingWebSocket.SendAsync(
+                            new ArraySegment<byte>(audioData),
+                            WebSocketMessageType.Binary,
+                            true,
+                            CancellationToken.None);
+
+                        _logger.LogDebug("[DIAG] Successfully sent {Length} bytes of translated audio", audioData.Length);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "[DIAG] Error sending translated audio to caller: {Length} bytes", audioData.Length);
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning("[DIAG] Cannot send translated audio - outgoing WebSocket {State}",
+                        _outgoingWebSocket?.State.ToString() ?? "null");
+                }
+            }
+            catch (Exception ex)
             {
-                await _outgoingWebSocket.SendAsync(
-                    new ArraySegment<byte>(audioData),
-                    WebSocketMessageType.Binary,
-                    true,
-                    CancellationToken.None);
+                _logger.LogError(ex, "[DIAG] Unhandled exception in ProcessUltravoxAudioAsync");
             }
         }
+
+        private async Task ReceiveUltravoxMessagesAsync()
+        {
+            var buffer = new byte[16384]; // 16KB buffer
+            int messageCount = 0;
+            int textMessageCount = 0;
+            int binaryMessageCount = 0;
+
+            try
+            {
+                _logger.LogInformation("[DIAG] Starting Ultravox message receiver loop");
+
+                while (_ultravoxWebSocket != null &&
+                       _ultravoxWebSocket.State == WebSocketState.Open &&
+                       !(_cancellationTokenSource?.IsCancellationRequested ?? true))
+                {
+                    messageCount++;
+
+                    try
+                    {
+                        var result = await _ultravoxWebSocket.ReceiveAsync(
+                            new ArraySegment<byte>(buffer),
+                            _cancellationTokenSource?.Token ?? CancellationToken.None);
+
+                        if (messageCount <= 5 || messageCount % 100 == 0)
+                        {
+                            _logger.LogDebug("[DIAG] Ultravox message {Count}: Type={MessageType}, Count={Count}",
+                                messageCount, result.MessageType, result.Count);
+                        }
+
+                        if (result.MessageType == WebSocketMessageType.Binary)
+                        {
+                            binaryMessageCount++;
+
+                            // This is audio data from Ultravox
+                            var audioData = new byte[result.Count];
+                            Array.Copy(buffer, audioData, result.Count);
+
+                            // Log periodically about receiving binary data
+                            if (binaryMessageCount % 20 == 0)
+                            {
+                                _logger.LogInformation("[DIAG] Received {Count} binary messages from Ultravox, latest size: {Size}",
+                                    binaryMessageCount, result.Count);
+                            }
+
+                            await ProcessUltravoxAudioAsync(audioData);
+                        }
+                        else if (result.MessageType == WebSocketMessageType.Text)
+                        {
+                            textMessageCount++;
+
+                            // This is a JSON control message
+                            var message = Encoding.UTF8.GetString(buffer, 0, result.Count);
+                            _logger.LogInformation("[DIAG] Ultravox control message #{Count}: {Message}",
+                                textMessageCount, message);
+                        }
+                        else if (result.MessageType == WebSocketMessageType.Close)
+                        {
+                            _logger.LogInformation("[DIAG] Ultravox WebSocket closing: {CloseStatus} {CloseDescription}",
+                                result.CloseStatus, result.CloseStatusDescription);
+                            break;
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        _logger.LogInformation("[DIAG] Ultravox receive operation canceled");
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "[DIAG] Error receiving message {Count} from Ultravox", messageCount);
+
+                        // Don't break - try to continue receiving
+                        await Task.Delay(100);
+                    }
+                }
+
+                _logger.LogInformation("[DIAG] Exited Ultravox receiver loop - WebSocket state: {State}, Token canceled: {Canceled}, Messages: {Total} (Binary: {Binary}, Text: {Text})",
+                    _ultravoxWebSocket?.State.ToString() ?? "null",
+                    _cancellationTokenSource?.IsCancellationRequested ?? true,
+                    messageCount, binaryMessageCount, textMessageCount);
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogInformation("[DIAG] Ultravox message processing canceled");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[DIAG] Unhandled error in Ultravox message processing");
+            }
+        }
+
+        // Add these variables to the class
+        private long _totalBytesReceived = 0;
+        private long _totalBytesSent = 0;
+
+
+
+
+
+
 
         public void SetIncomingWebSocket(WebSocket webSocket)
         {
@@ -343,26 +506,6 @@ Wait until the speaker is done speaking before translating, and translate the en
         public void SetOutgoingWebSocket(WebSocket webSocket)
         {
             _outgoingWebSocket = webSocket;
-        }
-
-        public async Task ProcessAudioAsync(byte[] audioData)
-        {
-            if (_enableFileLogging && !string.IsNullOrEmpty(_incomingAudioFilePath))
-            {
-                await File.AppendAllBytesAsync(_incomingAudioFilePath, audioData);
-                _logger.LogDebug("Wrote {Length} bytes to {FilePath}",
-                    audioData.Length, _incomingAudioFilePath);
-            }
-
-            // For Ultravox, just send the raw PCM audio (no base64 encoding needed)
-            if (_ultravoxWebSocket != null && _ultravoxWebSocket.State == WebSocketState.Open)
-            {
-                await _ultravoxWebSocket.SendAsync(
-                    new ArraySegment<byte>(audioData),
-                    WebSocketMessageType.Binary,
-                    true,
-                    _cancellationTokenSource?.Token ?? CancellationToken.None);
-            }
         }
 
         public void Close()

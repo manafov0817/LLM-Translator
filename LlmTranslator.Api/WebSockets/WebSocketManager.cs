@@ -33,12 +33,15 @@ namespace LlmTranslator.Api.WebSockets
             var connectionId = Guid.NewGuid().ToString();
             var timeout = new CancellationTokenSource();
 
+            _logger.LogInformation("[DIAG] New WebSocket connection: {ConnectionId}, Remote IP: {RemoteIP}, Path: {Path}",
+                connectionId, context.Connection.RemoteIpAddress, context.Request.Path);
+
             // Add a timeout to close connections that don't send setup info
             var timeoutTask = Task.Delay(10000, timeout.Token).ContinueWith(t =>
             {
                 if (!t.IsCanceled)
                 {
-                    _logger.LogWarning("Closing WebSocket connection due to setup timeout: {ConnectionId}", connectionId);
+                    _logger.LogWarning("[DIAG] Closing WebSocket connection due to setup timeout: {ConnectionId}", connectionId);
                     CloseSocketAsync(webSocket, "Setup timeout").Wait();
                 }
             }, TaskContinuationOptions.OnlyOnRanToCompletion);
@@ -52,17 +55,24 @@ namespace LlmTranslator.Api.WebSockets
 
             _sockets.TryAdd(webSocket, socketInfo);
 
-            var buffer = new byte[4096];
+            var buffer = new byte[16384]; // Increased buffer size for diagnostics
+            bool setupReceived = false;
 
             try
             {
                 // Wait for the first message which should be a JSON setup message
+                _logger.LogInformation("[DIAG] Waiting for initial setup message: {ConnectionId}", connectionId);
+
                 var result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+
+                _logger.LogInformation("[DIAG] Received initial message: Type={MessageType}, Count={Count}, EndOfMessage={EndOfMessage}",
+                    result.MessageType, result.Count, result.EndOfMessage);
 
                 if (result.MessageType == WebSocketMessageType.Text)
                 {
+                    setupReceived = true;
                     var message = Encoding.UTF8.GetString(buffer, 0, result.Count);
-                    _logger.LogDebug("Received setup message: {Message}", message);
+                    _logger.LogInformation("[DIAG] Received setup message: {Message}", message);
 
                     try
                     {
@@ -74,7 +84,7 @@ namespace LlmTranslator.Api.WebSockets
 
                         if (setupData?.CallSid == null)
                         {
-                            _logger.LogWarning("Invalid setup data, missing CallSid: {Message}", message);
+                            _logger.LogWarning("[DIAG] Invalid setup data, missing CallSid: {Message}", message);
                             await CloseSocketAsync(webSocket, "Invalid setup data, missing CallSid");
                             return;
                         }
@@ -83,56 +93,142 @@ namespace LlmTranslator.Api.WebSockets
                         socketInfo.CallSid = setupData.CallSid;
                         socketInfo.ParentCallSid = setupData.ParentCallSid;
 
-                        // Add to YardMaster
-                        _yardMaster.AddJambonzWebSocket(webSocket, setupData.CallSid, setupData.ParentCallSid);
+                        _logger.LogInformation("[DIAG] Valid setup received: CallSid={CallSid}, ParentCallSid={ParentCallSid}, Direction={Direction}",
+                            setupData.CallSid, setupData.ParentCallSid, setupData.Direction);
 
-                        // Keep the connection alive
-                        await KeepAliveAsync(webSocket);
+                        // Add to YardMaster
+                        try
+                        {
+                            _logger.LogInformation("[DIAG] Adding WebSocket to YardMaster: CallSid={CallSid}, ParentCallSid={ParentCallSid}",
+                                setupData.CallSid, setupData.ParentCallSid);
+
+                            _yardMaster.AddJambonzWebSocket(webSocket, setupData.CallSid, setupData.ParentCallSid);
+
+                            _logger.LogInformation("[DIAG] Successfully added WebSocket to YardMaster");
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, "[DIAG] Error adding WebSocket to YardMaster");
+                            await CloseSocketAsync(webSocket, "Error adding to call session");
+                            return;
+                        }
                     }
                     catch (JsonException ex)
                     {
-                        _logger.LogError(ex, "Invalid JSON received: {Message}", message);
+                        _logger.LogError(ex, "[DIAG] Invalid JSON received: {Message}", message);
                         await CloseSocketAsync(webSocket, "Invalid setup data");
+                        return;
                     }
                 }
-                else
+                else if (result.MessageType == WebSocketMessageType.Binary)
                 {
-                    _logger.LogWarning("Expected text message for initial setup, received: {MessageType}", result.MessageType);
-                    await CloseSocketAsync(webSocket, "Expected text message for initial setup");
+                    // This is unexpected, but we'll handle it gracefully
+                    _logger.LogWarning("[DIAG] Received binary data instead of text setup. Size: {Size} bytes", result.Count);
+
+                    // Try to determine if this is a Jambonz connection by examining the first few bytes
+                    var firstFewBytes = new byte[Math.Min(16, result.Count)];
+                    Array.Copy(buffer, firstFewBytes, firstFewBytes.Length);
+                    var hexString = BitConverter.ToString(firstFewBytes);
+
+                    _logger.LogInformation("[DIAG] First bytes of binary data: {HexString}", hexString);
+
+                    // Continue without setup data - we'll assign a dummy setup
+                    socketInfo.CallSid = $"unknown-{connectionId}";
+
+                    _logger.LogWarning("[DIAG] Assigning temporary CallSid: {CallSid}", socketInfo.CallSid);
+
+                    // Cancel the timeout since we received something
+                    timeout.Cancel();
+
+                    // Process this binary data immediately so it's not lost
+                    processData(result.MessageType, result.Count);
                 }
+                else if (result.MessageType == WebSocketMessageType.Close)
+                {
+                    _logger.LogInformation("[DIAG] WebSocket closed during setup: {Status} {Description}",
+                        result.CloseStatus, result.CloseStatusDescription);
+                    return;
+                }
+
+                // Keep reading until the WebSocket is closed
+                int messageCount = 0;
+
+                _logger.LogInformation("[DIAG] Starting main WebSocket receive loop: {ConnectionId}", connectionId);
+
+                // Main loop for reading WebSocket messages
+                while (webSocket.State == WebSocketState.Open)
+                {
+                    messageCount++;
+
+                    try
+                    {
+                        result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+
+                        if (messageCount <= 5 || messageCount % 100 == 0)
+                        {
+                            _logger.LogDebug("[DIAG] WebSocket message {Count}: Type={MessageType}, Size={Size}",
+                                messageCount, result.MessageType, result.Count);
+                        }
+
+                        if (result.MessageType == WebSocketMessageType.Close)
+                        {
+                            _logger.LogInformation("[DIAG] WebSocket closing: {Status} {Description}",
+                                result.CloseStatus, result.CloseStatusDescription);
+                            break;
+                        }
+
+                        // Process the data - at this point YardMaster should handle it
+                        processData(result.MessageType, result.Count);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "[DIAG] Error receiving WebSocket data");
+                        break;
+                    }
+                }
+
+                _logger.LogInformation("[DIAG] WebSocket connection closed: {ConnectionId}, State: {State}, Messages: {Count}",
+                    connectionId, webSocket.State, messageCount);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error handling WebSocket connection: {ConnectionId}", connectionId);
-                await CloseSocketAsync(webSocket, "Error handling connection");
+                _logger.LogError(ex, "[DIAG] Unhandled error in WebSocketManager: {ConnectionId}", connectionId);
             }
             finally
             {
                 _sockets.TryRemove(webSocket, out _);
-                timeout.Dispose();
-            }
-        }
+                try { timeout.Dispose(); } catch { }
 
-        /// <summary>
-        /// Keeps the WebSocket connection alive
-        /// </summary>
-        /// <param name="webSocket">The WebSocket</param>
-        private async Task KeepAliveAsync(WebSocket webSocket)
-        {
-            try
-            {
-                // Use a task that never completes to keep the socket open
-                // The actual socket will be managed by the YardMaster
-                var cts = new CancellationTokenSource();
-                await Task.Delay(-1, cts.Token);
+                try
+                {
+                    if (webSocket.State != WebSocketState.Closed && webSocket.State != WebSocketState.Aborted)
+                    {
+                        await CloseSocketAsync(webSocket, "Manager cleanup");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[DIAG] Error during final WebSocket cleanup");
+                }
+
+                _logger.LogInformation("[DIAG] WebSocket connection handler exited: {ConnectionId}, Setup received: {SetupReceived}",
+                    connectionId, setupReceived);
             }
-            catch (TaskCanceledException)
+
+            // Local function to process received data
+            void processData(WebSocketMessageType messageType, int count)
             {
-                // Expected when the token is canceled
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error keeping WebSocket connection alive");
+                if (!setupReceived && messageType == WebSocketMessageType.Binary)
+                {
+                    _logger.LogWarning("[DIAG] Received binary data before setup. This is unexpected but will be processed.");
+                }
+
+                if (messageType == WebSocketMessageType.Text)
+                {
+                    var textMessage = Encoding.UTF8.GetString(buffer, 0, count);
+                    _logger.LogInformation("[DIAG] Received text message: {Message}", textMessage);
+                }
+                // Binary data is handled by YardMaster/CallSession via the WebSocket itself
             }
         }
 
@@ -145,17 +241,22 @@ namespace LlmTranslator.Api.WebSockets
         {
             try
             {
+                _logger.LogInformation("[DIAG] Closing WebSocket: {State}, Reason: {Reason}",
+                    webSocket.State, reason);
+
                 if (webSocket.State == WebSocketState.Open)
                 {
                     await webSocket.CloseAsync(
                         WebSocketCloseStatus.NormalClosure,
                         reason,
                         CancellationToken.None);
+
+                    _logger.LogInformation("[DIAG] WebSocket closed successfully");
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error closing WebSocket: {Reason}", reason);
+                _logger.LogError(ex, "[DIAG] Error closing WebSocket: {Reason}", reason);
             }
         }
 

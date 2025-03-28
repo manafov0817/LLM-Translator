@@ -5,6 +5,10 @@ using WebSocketManager = LlmTranslator.Api.WebSockets.WebSocketManager;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Print language configuration during startup for debugging
+Console.WriteLine($"CallingPartyLanguage: {builder.Configuration["CallingPartyLanguage"] ?? Environment.GetEnvironmentVariable("CallingPartyLanguage") ?? "Not set, using default"}");
+Console.WriteLine($"CalledPartyLanguage: {builder.Configuration["CalledPartyLanguage"] ?? Environment.GetEnvironmentVariable("CalledPartyLanguage") ?? "Not set, using default"}");
+
 // Configure JSON options (important for JsonElement serialization/deserialization)
 builder.Services.AddControllers().AddJsonOptions(options =>
 {
@@ -21,10 +25,12 @@ builder.Services.AddSingleton<WebSocketManager>();
 // Choose which one to use based on configuration
 if (!string.IsNullOrEmpty(builder.Configuration["OpenAI:ApiKey"]))
 {
+    Console.WriteLine("Using OpenAI translation service");
     builder.Services.AddSingleton<ITranslationService, OpenAiTranslationService>();
 }
 else if (!string.IsNullOrEmpty(builder.Configuration["Ultravox:ApiKey"]))
 {
+    Console.WriteLine("Using Ultravox translation service");
     builder.Services.AddSingleton<ITranslationService, UltravoxTranslationService>();
 }
 else
@@ -36,29 +42,22 @@ else
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<JambonzService>();
 
-// Add WebSockets
+// Add WebSockets with increased buffer size for better audio handling
 builder.Services.AddWebSockets(options =>
 {
     options.KeepAliveInterval = TimeSpan.FromSeconds(120);
-    options.ReceiveBufferSize = 4 * 1024; // 4KB buffer size
+    options.ReceiveBufferSize = 16 * 1024; // Increased to 16KB buffer size
 });
 
-// Validate required configuration
-var requiredConfigs = new[] {
-    "CalledPartyLanguage",
-    "CallingPartyLanguage"
-};
+// Configure logging to include more details
+builder.Logging.AddConsole();
+builder.Logging.SetMinimumLevel(LogLevel.Debug);
 
-foreach (var config in requiredConfigs)
-{
-    if (string.IsNullOrEmpty(builder.Configuration[config]))
-    {
-        throw new Exception($"{config} is required in configuration");
-    }
-}
+// Make IConfiguration available to the CallSession
+builder.Services.AddSingleton<IConfiguration>(builder.Configuration);
 
+// Modify YardMaster factory method to include IConfiguration
 var app = builder.Build();
-
 
 app.UseCors(policy =>
 {
@@ -66,7 +65,6 @@ app.UseCors(policy =>
           .AllowAnyMethod()
           .AllowAnyHeader();
 });
-
 
 app.UseHttpsRedirection();
 app.UseAuthorization();
