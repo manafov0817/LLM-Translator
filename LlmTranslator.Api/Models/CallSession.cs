@@ -20,7 +20,7 @@ namespace LlmTranslator.Api.Models
         private Task? _processAudioTaskB;
 
         private ITranslationAdapter? _adapterAToB;
-        private ITranslationAdapter? _adapterBToA; 
+        private ITranslationAdapter? _adapterBToA;
 
         private bool _disposed = false;
 
@@ -30,23 +30,6 @@ namespace LlmTranslator.Api.Models
             _logger = logger;
             _translationService = translationService;
             _cancellationTokenSource = new CancellationTokenSource();
-
-            Task.Run(DiagnosticHeartbeat);
-        }
-
-        private async Task DiagnosticHeartbeat()
-        {
-            while (!_disposed && !(_cancellationTokenSource?.IsCancellationRequested ?? true))
-            {
-                try
-                {
-                    await Task.Delay(5000);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Error in diagnostic heartbeat");
-                }
-            }
         }
 
         public void AddWebSocket(WebSocket webSocket, string callSid)
@@ -142,15 +125,9 @@ namespace LlmTranslator.Api.Models
                     }
                 }
 
-                int messageCount = 0;
-                int textMessageCount = 0;
-                int binaryMessageCount = 0;
-
                 while (webSocket.State == WebSocketState.Open &&
                        !(_cancellationTokenSource?.IsCancellationRequested ?? true))
                 {
-                    messageCount++;
-
                     try
                     {
                         receiveResult = await webSocket.ReceiveAsync(
@@ -158,16 +135,14 @@ namespace LlmTranslator.Api.Models
 
                         if (receiveResult.MessageType == WebSocketMessageType.Binary)
                         {
-                            binaryMessageCount++;
                             var audioData = new byte[receiveResult.Count];
-                            Array.Copy(buffer, audioData, receiveResult.Count); 
+                            Array.Copy(buffer, audioData, receiveResult.Count);
 
                             await adapter.ProcessAudioAsync(audioData);
                         }
                         else if (receiveResult.MessageType == WebSocketMessageType.Text)
                         {
-                            textMessageCount++;
-                            var textMessage = Encoding.UTF8.GetString(buffer, 0, receiveResult.Count);
+                            // Process text messages if needed
                         }
                         else if (receiveResult.MessageType == WebSocketMessageType.Close)
                         {

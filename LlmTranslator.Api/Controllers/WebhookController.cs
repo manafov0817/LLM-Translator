@@ -26,18 +26,15 @@ namespace LlmTranslator.Api.Controllers
         [HttpPost("translate")]
         public IActionResult TranslateCall([FromBody] JsonElement request)
         {
-            _logger.LogInformation("Received translate webhook: {Request}", JsonSerializer.Serialize(request));
+            _logger.LogInformation("Received translate webhook");
 
             try
             {
                 string callSid = GetStringProperty(request, "call_sid");
                 string direction = GetStringProperty(request, "direction");
 
-                _logger.LogDebug("Request fields: call_sid={CallSid}, direction={Direction}", callSid, direction);
-
                 if (string.IsNullOrEmpty(callSid))
                 {
-                    _logger.LogWarning("Missing call_sid in request");
                     return BadRequest(new { error = "Missing call_sid" });
                 }
 
@@ -53,19 +50,12 @@ namespace LlmTranslator.Api.Controllers
                         from = GetStringProperty(request, "caller_name");
                     }
 
-                    _logger.LogInformation("Processing inbound call: from={From}, to={To}", from, to);
-
                     int sampleRate = GetSampleRate();
                     bool lowerVolume = !string.IsNullOrEmpty(_configuration["LowerVolume"]);
                     string callerIdOverride = _configuration["CallerIdOverride"] ?? from;
 
-                    _logger.LogDebug("Using settings: sampleRate={SampleRate}, callerIdOverride={CallerId}",
-                        sampleRate, callerIdOverride);
-
                     var target = CreateTarget(to);
-                    _logger.LogDebug("Created target: {Target}", JsonSerializer.Serialize(target));
 
-                    _logger.LogDebug("Building response JSON");
                     var response = new JsonArray();
 
                     var configAction = new JsonObject
@@ -96,7 +86,7 @@ namespace LlmTranslator.Api.Controllers
                     var dialAction = new JsonObject
                     {
                         ["verb"] = "dial",
-                        ["callerId"] = "+17692481301",
+                        ["callerId"] = callerIdOverride,
                         ["target"] = target,
                         ["listen"] = new JsonObject
                         {
@@ -128,13 +118,10 @@ namespace LlmTranslator.Api.Controllers
                         ["verb"] = "hangup"
                     });
 
-                    _logger.LogDebug("Returning response: {Response}", JsonSerializer.Serialize(response));
-
                     return Ok(response);
                 }
                 else
                 {
-                    _logger.LogInformation("Received non-inbound direction: {Direction}", direction);
                     return Ok(new JsonArray());
                 }
             }
@@ -151,22 +138,19 @@ namespace LlmTranslator.Api.Controllers
         [HttpPost("translate-action")]
         public IActionResult TranslateAction([FromBody] JsonElement request)
         {
-            _logger.LogInformation("Received translate action webhook: {Request}", JsonSerializer.Serialize(request));
-
+            _logger.LogInformation("Received translate action webhook");
             return Ok(new JsonArray());
         }
 
         [HttpPost("status")]
         public IActionResult CallStatus([FromBody] JsonElement request)
         {
-            _logger.LogInformation("Call status update received: {Request}", JsonSerializer.Serialize(request));
+            _logger.LogInformation("Call status update received");
 
             try
             {
                 string callStatus = GetStringProperty(request, "call_status");
                 string callSid = GetStringProperty(request, "call_sid");
-
-                _logger.LogDebug("Status update: call_status={CallStatus}, call_sid={CallSid}", callStatus, callSid);
 
                 if (callStatus == "completed" && !string.IsNullOrEmpty(callSid))
                 {
@@ -252,8 +236,8 @@ namespace LlmTranslator.Api.Controllers
                     return targetArray;
                 }
 
-                _logger.LogWarning("Unrecognized OUTBOUND_OVERRIDE format: {Override}, using default target: {To}",
-                    outboundOverride, to);
+                _logger.LogWarning("Unrecognized OUTBOUND_OVERRIDE format: {Override}, using default target",
+                    outboundOverride);
             }
 
             var defaultTargetArray = new JsonArray();

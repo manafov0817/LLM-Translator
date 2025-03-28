@@ -27,6 +27,10 @@ namespace LlmTranslator.Api.Services
         private string? _outgoingAudioFilePath;
         private static int _instanceCounter = 0;
 
+        // Track bytes for monitoring
+        private long _totalBytesReceived = 0;
+        private long _totalBytesSent = 0;
+
         public UltravoxTranslationAdapter(
             ILogger logger,
             string apiKey,
@@ -128,11 +132,11 @@ namespace LlmTranslator.Api.Services
                     },
                     inactivityMessages = new[]
                     {
-                new
-                {
-                    duration = "120s"
-                }
-            },
+                        new
+                        {
+                            duration = "120s"
+                        }
+                    },
                     medium = new
                     {
                         serverWebSocket = new
@@ -184,8 +188,6 @@ namespace LlmTranslator.Api.Services
                     Error = false,
                     JoinUrl = responseData.JoinUrl
                 };
-
-
             }
             catch (Exception ex)
             {
@@ -228,8 +230,6 @@ namespace LlmTranslator.Api.Services
             }
         }
 
-        // Add these enhanced methods to your UltravoxTranslationAdapter class
-
         public async Task ProcessAudioAsync(byte[] audioData)
         {
             try
@@ -237,42 +237,35 @@ namespace LlmTranslator.Api.Services
                 if (_enableFileLogging && !string.IsNullOrEmpty(_incomingAudioFilePath))
                 {
                     await File.AppendAllBytesAsync(_incomingAudioFilePath, audioData);
-                    _logger.LogDebug("[DIAG] Wrote {Length} bytes to {FilePath}",
-                        audioData.Length, _incomingAudioFilePath);
                 }
 
-                // Track and log aggregate audio data
+                // Track audio data
                 _totalBytesReceived += audioData.Length;
+
+                // Periodic logging of total received
                 if (_totalBytesReceived % 50000 < audioData.Length)
                 {
-                    _logger.LogInformation("[DIAG] Total audio received: {TotalKB}KB, WebSocket state: {State}",
-                        _totalBytesReceived / 1024,
-                        _ultravoxWebSocket?.State.ToString() ?? "null");
+                    _logger.LogInformation("Total audio received: {TotalKB}KB",
+                        _totalBytesReceived / 1024);
                 }
 
                 // Check if we're properly initialized
                 if (!_initialized)
                 {
-                    _logger.LogWarning("[DIAG] Received audio but Ultravox adapter not yet initialized. Buffering: {Length} bytes",
-                        audioData.Length);
-
-                    // Store in a buffer if needed, or just skip
+                    _logger.LogWarning("Received audio but Ultravox adapter not yet initialized");
                     return;
                 }
 
                 // Check if we're in an error state
                 if (_errored)
                 {
-                    _logger.LogWarning("[DIAG] Received audio but Ultravox adapter is in error state. Skipping: {Length} bytes",
-                        audioData.Length);
+                    _logger.LogWarning("Received audio but Ultravox adapter is in error state");
                     return;
                 }
 
                 // For Ultravox, just send the raw PCM audio (no base64 encoding needed)
                 if (_ultravoxWebSocket != null && _ultravoxWebSocket.State == WebSocketState.Open)
                 {
-                    _logger.LogDebug("[DIAG] Sending {Length} bytes to Ultravox", audioData.Length);
-
                     try
                     {
                         await _ultravoxWebSocket.SendAsync(
@@ -280,23 +273,20 @@ namespace LlmTranslator.Api.Services
                             WebSocketMessageType.Binary,
                             true,
                             _cancellationTokenSource?.Token ?? CancellationToken.None);
-
-                        _logger.LogDebug("[DIAG] Successfully sent {Length} bytes to Ultravox", audioData.Length);
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "[DIAG] Error sending audio to Ultravox: {Length} bytes", audioData.Length);
+                        _logger.LogError(ex, "Error sending audio to Ultravox");
                     }
                 }
                 else
                 {
-                    _logger.LogWarning("[DIAG] Cannot send audio to Ultravox - WebSocket {State}",
-                        _ultravoxWebSocket?.State.ToString() ?? "null");
+                    _logger.LogWarning("Cannot send audio to Ultravox - WebSocket not available");
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[DIAG] Unhandled exception in ProcessAudioAsync");
+                _logger.LogError(ex, "Unhandled exception in ProcessAudioAsync");
             }
         }
 
@@ -307,24 +297,21 @@ namespace LlmTranslator.Api.Services
                 if (_enableFileLogging && !string.IsNullOrEmpty(_outgoingAudioFilePath))
                 {
                     await File.AppendAllBytesAsync(_outgoingAudioFilePath, audioData);
-                    _logger.LogDebug("[DIAG] Wrote {Length} bytes to {FilePath}",
-                        audioData.Length, _outgoingAudioFilePath);
                 }
 
-                // Track and log translated audio data
+                // Track translated audio data
                 _totalBytesSent += audioData.Length;
+
+                // Periodic logging of total sent
                 if (_totalBytesSent % 50000 < audioData.Length)
                 {
-                    _logger.LogInformation("[DIAG] Received translated audio from Ultravox: {TotalKB}KB, Outgoing WebSocket: {State}",
-                        _totalBytesSent / 1024,
-                        _outgoingWebSocket?.State.ToString() ?? "null");
+                    _logger.LogInformation("Received translated audio from Ultravox: {TotalKB}KB",
+                        _totalBytesSent / 1024);
                 }
 
                 // Send to outgoing WebSocket if available
                 if (_outgoingWebSocket != null && _outgoingWebSocket.State == WebSocketState.Open)
                 {
-                    _logger.LogDebug("[DIAG] Sending {Length} bytes of translated audio to caller", audioData.Length);
-
                     try
                     {
                         await _outgoingWebSocket.SendAsync(
@@ -332,23 +319,20 @@ namespace LlmTranslator.Api.Services
                             WebSocketMessageType.Binary,
                             true,
                             CancellationToken.None);
-
-                        _logger.LogDebug("[DIAG] Successfully sent {Length} bytes of translated audio", audioData.Length);
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "[DIAG] Error sending translated audio to caller: {Length} bytes", audioData.Length);
+                        _logger.LogError(ex, "Error sending translated audio to caller");
                     }
                 }
                 else
                 {
-                    _logger.LogWarning("[DIAG] Cannot send translated audio - outgoing WebSocket {State}",
-                        _outgoingWebSocket?.State.ToString() ?? "null");
+                    _logger.LogWarning("Cannot send translated audio - outgoing WebSocket not available");
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[DIAG] Unhandled exception in ProcessUltravoxAudioAsync");
+                _logger.LogError(ex, "Unhandled exception in ProcessUltravoxAudioAsync");
             }
         }
 
@@ -361,7 +345,7 @@ namespace LlmTranslator.Api.Services
 
             try
             {
-                _logger.LogInformation("[DIAG] Starting Ultravox message receiver loop");
+                _logger.LogInformation("Starting Ultravox message receiver loop");
 
                 while (_ultravoxWebSocket != null &&
                        _ultravoxWebSocket.State == WebSocketState.Open &&
@@ -375,12 +359,6 @@ namespace LlmTranslator.Api.Services
                             new ArraySegment<byte>(buffer),
                             _cancellationTokenSource?.Token ?? CancellationToken.None);
 
-                        if (messageCount <= 5 || messageCount % 100 == 0)
-                        {
-                            _logger.LogDebug("[DIAG] Ultravox message {Count}: Type={MessageType}, Count={Count}",
-                                messageCount, result.MessageType, result.Count);
-                        }
-
                         if (result.MessageType == WebSocketMessageType.Binary)
                         {
                             binaryMessageCount++;
@@ -392,8 +370,8 @@ namespace LlmTranslator.Api.Services
                             // Log periodically about receiving binary data
                             if (binaryMessageCount % 20 == 0)
                             {
-                                _logger.LogInformation("[DIAG] Received {Count} binary messages from Ultravox, latest size: {Size}",
-                                    binaryMessageCount, result.Count);
+                                _logger.LogInformation("Received {Count} binary messages from Ultravox",
+                                    binaryMessageCount);
                             }
 
                             await ProcessUltravoxAudioAsync(audioData);
@@ -404,48 +382,40 @@ namespace LlmTranslator.Api.Services
 
                             // This is a JSON control message
                             var message = Encoding.UTF8.GetString(buffer, 0, result.Count);
-                            _logger.LogInformation("[DIAG] Ultravox control message #{Count}: {Message}",
-                                textMessageCount, message);
+                            _logger.LogInformation("Ultravox control message: {Message}", message);
                         }
                         else if (result.MessageType == WebSocketMessageType.Close)
                         {
-                            _logger.LogInformation("[DIAG] Ultravox WebSocket closing: {CloseStatus} {CloseDescription}",
-                                result.CloseStatus, result.CloseStatusDescription);
+                            _logger.LogInformation("Ultravox WebSocket closing");
                             break;
                         }
                     }
                     catch (OperationCanceledException)
                     {
-                        _logger.LogInformation("[DIAG] Ultravox receive operation canceled");
+                        _logger.LogInformation("Ultravox receive operation canceled");
                         break;
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "[DIAG] Error receiving message {Count} from Ultravox", messageCount);
+                        _logger.LogError(ex, "Error receiving message from Ultravox");
 
                         // Don't break - try to continue receiving
                         await Task.Delay(100);
                     }
                 }
 
-                _logger.LogInformation("[DIAG] Exited Ultravox receiver loop - WebSocket state: {State}, Token canceled: {Canceled}, Messages: {Total} (Binary: {Binary}, Text: {Text})",
-                    _ultravoxWebSocket?.State.ToString() ?? "null",
-                    _cancellationTokenSource?.IsCancellationRequested ?? true,
+                _logger.LogInformation("Exited Ultravox receiver loop - Messages: {Total} (Binary: {Binary}, Text: {Text})",
                     messageCount, binaryMessageCount, textMessageCount);
             }
             catch (OperationCanceledException)
             {
-                _logger.LogInformation("[DIAG] Ultravox message processing canceled");
+                _logger.LogInformation("Ultravox message processing canceled");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[DIAG] Unhandled error in Ultravox message processing");
+                _logger.LogError(ex, "Unhandled error in Ultravox message processing");
             }
         }
-
-        // Add these variables to the class
-        private long _totalBytesReceived = 0;
-        private long _totalBytesSent = 0;
 
         public void SetIncomingWebSocket(WebSocket webSocket)
         {
@@ -456,11 +426,7 @@ namespace LlmTranslator.Api.Services
                 return;
             }
 
-            _incomingWebSocket = webSocket;
-
-            // Setup event handling for the incoming socket in .NET is different
-            // We use a Task to continuously read from the socket, but this is
-            // managed by the CallSession class now, not here
+            _incomingWebSocket = webSocket; 
         }
 
         public void SetOutgoingWebSocket(WebSocket webSocket)
