@@ -46,13 +46,13 @@ namespace LlmTranslator.Api.Models
                 // Create translation adapters when the first WebSocket is added
                 _adapterAToB = _translationService.CreateTranslationAdapter(
                     _logger,
-                    Environment.GetEnvironmentVariable("CALLING_PARTY_LANGUAGE") ?? "English",
-                    Environment.GetEnvironmentVariable("CALLED_PARTY_LANGUAGE") ?? "Spanish");
+                    Environment.GetEnvironmentVariable("CallingPartyLanguage") ?? "English",
+                    Environment.GetEnvironmentVariable("CalledPartyLanguage") ?? "Spanish");
 
                 _adapterBToA = _translationService.CreateTranslationAdapter(
                     _logger,
-                    Environment.GetEnvironmentVariable("CALLED_PARTY_LANGUAGE") ?? "Spanish",
-                    Environment.GetEnvironmentVariable("CALLING_PARTY_LANGUAGE") ?? "English");
+                    Environment.GetEnvironmentVariable("CalledPartyLanguage") ?? "Spanish",
+                    Environment.GetEnvironmentVariable("CallingPartyLanguage") ?? "English");
 
                 // Connect the WebSocket to the translation adapter
                 _adapterAToB.SetIncomingWebSocket(_webSocketA);
