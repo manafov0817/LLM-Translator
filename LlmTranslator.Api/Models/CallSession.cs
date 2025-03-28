@@ -88,8 +88,8 @@ namespace LlmTranslator.Api.Models
                 try
                 {
                     // Create translation adapters when the first WebSocket is added
-                    string sourceLanguage = Environment.GetEnvironmentVariable("CallingPartyLanguage") ?? "English";
-                    string targetLanguage = Environment.GetEnvironmentVariable("CalledPartyLanguage") ?? "Turkish";
+                    string sourceLanguage = Environment.GetEnvironmentVariable("CallingPartyLanguage") ?? "Ukrainian";
+                    string targetLanguage = Environment.GetEnvironmentVariable("CalledPartyLanguage") ?? "English";
 
                     _logger.LogInformation("[DIAG] Creating translation adapters with languages: {SourceLang} -> {TargetLang}",
                         sourceLanguage, targetLanguage);
